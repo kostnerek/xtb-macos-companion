@@ -95,13 +95,34 @@ func record(_ name: String, _ object: Any) {
 }
 
 // MARK: CAS login
+func addHeaders(_ req: inout URLRequest) {
+    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    let headers: [String: String] = [
+        "origin": "https://xstation5.xtb.com",
+        "priority": "u=1, i",
+        "referer": "https://xstation5.xtb.com/",
+        "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": "\"macOS\"",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+        "x-grpc-web": "1",
+        "x-user-agent": "grpc-web-javascript/0.1"
+    ]
+
+    for (key, value) in headers {
+        req.setValue(value, forHTTPHeaderField: key)
+    }
+}
 
 let http = URLSession(configuration: .ephemeral)
 func post(_ path: String, _ body: [String: Any]) async throws -> (status: Int, json: [String: Any]) {
     var req = URLRequest(url: URL(string: "https://xstation.xtb.com/signon" + path)!)
     req.httpMethod = "POST"
     req.httpBody = try JSONSerialization.data(withJSONObject: body)
-    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    addHeaders(&req)
     // The API expects Time-Zone as the UTC offset in minutes.
     req.setValue("*/*", forHTTPHeaderField: "Accept")
     req.setValue(String(TimeZone.current.secondsFromGMT() / 60), forHTTPHeaderField: "Time-Zone")
