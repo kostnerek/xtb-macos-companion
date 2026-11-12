@@ -45,11 +45,13 @@ public struct Trade: Equatable, Sendable {
     public let idPosition: Int
     public let symbolKey: String
     public let isOpen: Bool
+    public let accountNo: String
 
-    public init(idPosition: Int, symbolKey: String, isOpen: Bool) {
+    public init(idPosition: Int, symbolKey: String, isOpen: Bool, accountNo: String) {
         self.idPosition = idPosition
         self.symbolKey = symbolKey
         self.isOpen = isOpen
+        self.accountNo = accountNo
     }
 }
 
@@ -130,9 +132,9 @@ private func decodeRows(_ rows: [[String: Any]]) -> [XTBEvent] {
                 events.append(.tradeProfit(TradeProfit(idPosition: id, profit: profit, marketValue: marketValue)))
             }
         } else if let t = value["xcfdtrade"] as? [String: Any] {
-            if let id = t["positionId"] as? Int, let symbol = t["symbol"] as? String {
+            if let id = t["positionId"] as? Int, let symbol = t["symbol"] as? String, let account = t["account"] as? String {
                 let isOpen = (row["state"] as? Int) != deletedRowState
-                events.append(.trade(Trade(idPosition: id, symbolKey: symbol, isOpen: isOpen)))
+                events.append(.trade(Trade(idPosition: id, symbolKey: symbol, isOpen: isOpen, accountNo: account)))
             }
         } else if let s = value["xcfdsymbol"] as? [String: Any] {
             if let key = s["name"] as? String, let name = s["displayName"] as? String {

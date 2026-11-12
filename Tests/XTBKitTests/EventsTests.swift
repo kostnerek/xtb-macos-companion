@@ -43,21 +43,21 @@ final class EventsTests: XCTestCase {
 
     func testTradeRecordResponse() {
         XCTAssertEqual(decodeEvents(fixture("trade_record")), [
-            .trade(Trade(idPosition: -1929030355, symbolKey: "AC.FR", isOpen: true)),
-            .trade(Trade(idPosition: -1456307190, symbolKey: "AMZN.US", isOpen: true)),
+            .trade(Trade(idPosition: -1929030355, symbolKey: "AC.FR", isOpen: true, accountNo: "10000001")),
+            .trade(Trade(idPosition: -1456307190, symbolKey: "AMZN.US", isOpen: true, accountNo: "10000001")),
         ])
     }
 
     func testTradeEvent() {
         XCTAssertEqual(decodeEvents(fixture("trade_event")),
-                       [.trade(Trade(idPosition: -1556578014, symbolKey: "AMD.US", isOpen: true))])
+                       [.trade(Trade(idPosition: -1556578014, symbolKey: "AMD.US", isOpen: true, accountNo: "10000001"))])
     }
 
     func testDeletedTradeRowIsNotOpen() throws {
         let text = String(decoding: fixture("trade_event"), as: UTF8.self)
             .replacingOccurrences(of: "\"row\":{\"state\":1", with: "\"row\":{\"state\":2")
         XCTAssertEqual(decodeEvents(Data(text.utf8)),
-                       [.trade(Trade(idPosition: -1556578014, symbolKey: "AMD.US", isOpen: false))])
+                       [.trade(Trade(idPosition: -1556578014, symbolKey: "AMD.US", isOpen: false, accountNo: "10000001"))])
     }
 
     func testInstrumentsAreGroupedIntoOneEvent() {

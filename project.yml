@@ -1,0 +1,73 @@
+name: XTBBar
+options:
+  bundleIdPrefix: pl.local
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+packages:
+  XTBKit:
+    path: .
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    ENABLE_HARDENED_RUNTIME: NO
+    # Personal (free) team of the owner's Apple ID; the widget does not load without a real signature.
+    DEVELOPMENT_TEAM: DL6NP4452T
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: Apple Development
+    # Shared container for the app and the widget; the team prefix makes it valid without registration.
+    XTB_APP_GROUP: $(TeamIdentifierPrefix)pl.local.xtbbar
+targets:
+  XTBBar:
+    type: application
+    platform: macOS
+    sources:
+      - App
+      - Shared
+    dependencies:
+      - package: XTBKit
+      - target: XTBWidget
+    info:
+      path: App/Info.plist
+      properties:
+        LSUIElement: true
+        CFBundleDisplayName: XTBBar
+        CFBundleShortVersionString: "0.1"
+        CFBundleVersion: "1"
+        XTBAppGroup: $(XTB_APP_GROUP)
+    entitlements:
+      path: App/XTBBar.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - $(XTB_APP_GROUP)
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: pl.local.xtbbar
+  XTBWidget:
+    type: app-extension
+    platform: macOS
+    sources:
+      - Widget
+      - Shared
+    dependencies:
+      - package: XTBKit
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+    info:
+      path: Widget/Info.plist
+      properties:
+        CFBundleDisplayName: XTB
+        CFBundleShortVersionString: "0.1"
+        CFBundleVersion: "1"
+        XTBAppGroup: $(XTB_APP_GROUP)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: Widget/XTBWidget.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.application-groups:
+          - $(XTB_APP_GROUP)
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: pl.local.xtbbar.widget

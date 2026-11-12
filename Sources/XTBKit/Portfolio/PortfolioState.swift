@@ -1,12 +1,11 @@
 import Foundation
 
-/// Folds the event stream into what the app shows: totals summed over accounts and one row
+/// Folds the event stream into what the app shows: one snapshot per account, each with one row
 /// per instrument.
 public struct PortfolioState: Sendable {
     private var accounts: [String: XTBAccount] = [:]
     private var balances: [String: TotalBalance] = [:]
-    private var balanceOrder: [String] = []
-    private var openTrades: [Int: String] = [:]
+    private var openTrades: [Int: Trade] = [:]
     private var profits: [Int: TradeProfit] = [:]
     private var instrumentNames: [String: String] = [:]
 
@@ -17,11 +16,10 @@ public struct PortfolioState: Sendable {
         case .loginResult(let list):
             for account in list { accounts[account.accountNo] = account }
         case .balance(let balance):
-            if balances[balance.accountNo] == nil { balanceOrder.append(balance.accountNo) }
             balances[balance.accountNo] = balance
         case .trade(let trade):
             if trade.isOpen {
-                openTrades[trade.idPosition] = trade.symbolKey
+                openTrades[trade.idPosition] = trade
             } else {
                 openTrades[trade.idPosition] = nil
                 profits[trade.idPosition] = nil
@@ -35,38 +33,46 @@ public struct PortfolioState: Sendable {
         }
     }
 
-    /// Nil until at least one account balance has arrived.
-    public func snapshot(now: Date) -> Snapshot? {
-        guard !balances.isEmpty else { return nil }
+    /// Accounts the login announced and that are still in use, in account-number order.
+    public var activeAccounts: [String] {
+        accounts.values.filter { !$0.isArchived }.map(\.accountNo).sorted()
+    }
 
+    /// Accounts a balance has arrived for.
+    public var accountsWithBalance: Set<String> { Set(balances.keys) }
+
+    /// For the log: which accounts the page announced and which sent a balance (last 3 digits only).
+    public var diagnostics: String {
+        let announced = accounts.values.map { "…\($0.accountNo.suffix(3)) \($0.currency)\($0.isArchived ? " archived" : "")" }
+        let balanced = balances.keys.sorted().map { "…\($0.suffix(3))" }
+        return "accounts \(announced), balances from \(balanced), open trades \(openTrades.count)"
+    }
+
+    /// One snapshot for every account a balance has arrived for, keyed by account number.
+    public func snapshots(now: Date) -> [String: Snapshot] {
+        Dictionary(uniqueKeysWithValues: balances.keys.compactMap { no in snapshot(account: no, now: now).map { (no, $0) } })
+    }
+
+    /// Nil until that account's balance has arrived.
+    public func snapshot(account accountNo: String, now: Date) -> Snapshot? {
+        guard let balance = balances[accountNo] else { return nil }
         var bySymbol: [String: (value: Double, profit: Double)] = [:]
-        for (id, symbol) in openTrades {
+        for (id, trade) in openTrades where trade.accountNo == accountNo {
             guard let p = profits[id] else { continue }
-            let sum = bySymbol[symbol] ?? (0, 0)
-            bySymbol[symbol] = (sum.value + p.marketValue, sum.profit + p.profit)
+            let sum = bySymbol[trade.symbolKey] ?? (0, 0)
+            bySymbol[trade.symbolKey] = (sum.value + p.marketValue, sum.profit + p.profit)
         }
-        let rows = bySymbol
-            .map { symbol, sum in
-                PositionRow(name: instrumentNames[symbol] ?? symbol, value: sum.value, profit: sum.profit,
-                            profitPercent: Self.percent(profit: sum.profit, value: sum.value))
-            }
-            .sorted { ($0.value, $1.name) > ($1.value, $0.name) }
-
-        let currency = balanceOrder.lazy.compactMap { accounts[$0]?.currency }.first ?? ""
-        return Snapshot(
-            equity: balances.values.reduce(0) { $0 + $1.equity },
-            profit: balances.values.reduce(0) { $0 + $1.profit },
-            profitPercent: Self.percent(profit: rows.reduce(0) { $0 + $1.profit }, value: rows.reduce(0) { $0 + $1.value }),
-            currency: currency,
-            positions: rows,
-            updatedAt: now,
-            connected: true
-        )
+        let rows = bySymbol.map { symbol, sum in
+            PositionRow(name: instrumentNames[symbol] ?? symbol, value: sum.value, profit: sum.profit,
+                        profitPercent: profitPercent(profit: sum.profit, value: sum.value))
+        }
+        return Snapshot(equity: balance.equity, profit: balance.profit, currency: accounts[accountNo]?.currency ?? "",
+                        positions: rows, updatedAt: now)
     }
+}
 
-    /// Profit relative to what the positions cost: value minus profit.
-    private static func percent(profit: Double, value: Double) -> Double {
-        let cost = value - profit
-        return cost > 0 ? profit / cost * 100 : 0
-    }
+/// Profit relative to what the positions cost: value minus profit.
+func profitPercent(profit: Double, value: Double) -> Double {
+    let cost = value - profit
+    return cost > 0 ? profit / cost * 100 : 0
 }
