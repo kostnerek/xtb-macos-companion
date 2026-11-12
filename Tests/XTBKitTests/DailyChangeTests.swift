@@ -42,6 +42,12 @@ final class DailyChangeTests: XCTestCase {
         XCTAssertEqual(nextSampleDate(after: date(2026, 11, 12, 23, 59, 59)), date(2026, 11, 13, 0, 0))
     }
 
+    func testNextSampleDateUsesTheGivenInterval() {
+        XCTAssertEqual(nextSampleDate(after: date(2026, 11, 12, 10, 7, 30), every: 5 * 60), date(2026, 11, 12, 10, 10))
+        XCTAssertEqual(nextSampleDate(after: date(2026, 11, 12, 10, 7, 30), every: 60 * 60), date(2026, 11, 12, 11, 0))
+        XCTAssertEqual(nextSampleDate(after: date(2026, 11, 12, 10, 30), every: 30 * 60), date(2026, 11, 12, 11, 0))
+    }
+
     func testSegmentsSplitOnGap() {
         let t0 = date(2026, 11, 12, 9, 0)
         let a = sample(t0, 1), b = sample(t0.addingTimeInterval(900), 2), c = sample(t0.addingTimeInterval(900 + 3 * 3600), 3), d = sample(t0.addingTimeInterval(1800 + 3 * 3600), 4)

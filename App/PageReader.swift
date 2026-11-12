@@ -28,6 +28,10 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
     private static let hiddenTimeout: TimeInterval = 90
     /// How long the IKZE view may take to show its numbers before it is skipped.
     private static let ikzeTimeout: TimeInterval = 20
+    /// A live session ends after this long, so the next one reads every account afresh.
+    private static let liveCycle: TimeInterval = 15 * 60
+    /// After switching back to the złoty account, how long to let the page load.
+    private static let returnSeconds: TimeInterval = 12
     private static let interactiveTimeout: TimeInterval = 600
     private static let loginVerdictSeconds: TimeInterval = 25
 
@@ -135,13 +139,27 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
     private var interactive = false
     private var received = 0
     private var credentials: (() -> Credentials?)?
+    /// The account the page has open.
+    private var pageAccount: String?
+    /// Live mode: emit every this many seconds and keep the page open; nil for a single read.
+    private var live: TimeInterval?
+    private var onUpdate: (([String: Snapshot]) -> Void)?
+    private var liveSince: Date?
+    private var lastEmit = Date.distantPast
+    private var returningHome: Date?
 
     /// - Parameters:
     ///   - interactive: show the page in a window so the owner can log in by hand.
     ///   - credentials: asked at most once, and only if the page shows its login form.
-    func run(interactive: Bool, credentials: (() -> Credentials?)?) async -> RefreshOutcome {
+    ///   - live: after reading every account, keep the page open on the złoty account (whose
+    ///     data the page streams) and pass fresh snapshots to `onUpdate` every `live` seconds.
+    ///     Other accounts keep the values read at the start. Ends after `liveCycle`.
+    func run(interactive: Bool, credentials: (() -> Credentials?)?,
+             live: TimeInterval? = nil, onUpdate: (([String: Snapshot]) -> Void)? = nil) async -> RefreshOutcome {
         self.interactive = interactive
         self.credentials = credentials
+        self.live = interactive ? nil : live
+        self.onUpdate = onUpdate
         started = Date()
 
         let configuration = WKWebViewConfiguration()
@@ -196,8 +214,25 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
         }
     }
 
+    /// Ends a session early, keeping whatever was read.
+    func stop() {
+        finish(.snapshots(allSnapshots(now: Date())))
+    }
+
     private func tick() {
         let now = Date()
+        if let back = returningHome, now.timeIntervalSince(back) >= Self.returnSeconds {
+            returningHome = nil
+            return openIKZE()
+        }
+        if let since = liveSince, let live {
+            if now.timeIntervalSince(since) > Self.liveCycle { return finish(.snapshots(allSnapshots(now: now))) }
+            if now.timeIntervalSince(lastEmit) >= live {
+                lastEmit = now
+                refreshIKZE(now: now)
+                onUpdate?(allSnapshots(now: now))
+            }
+        }
         if let firstData, let current, now.timeIntervalSince(firstData) >= Self.settleSeconds {
             collected.insert(current)
             self.firstData = nil
@@ -244,6 +279,8 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
                 guard let self, self.continuation != nil else { return }
                 switch result as? String {
                 case "code": self.finish(.codeRequired)
+                // A live session that loses its login ends; the next one logs in again.
+                case "login" where self.liveSince != nil: self.finish(.snapshots(self.allSnapshots(now: Date())))
                 case "login": self.loginFormShown()
                 default: break
                 }
@@ -288,6 +325,7 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
             events.forEach { self.state.apply($0) }
             if self.firstData == nil, let fresh = self.state.accountsWithBalance.subtracting(self.collected).sorted().first {
                 self.current = fresh
+                if self.pageAccount == nil { self.pageAccount = fresh }
                 self.firstData = Date()
             }
         }
@@ -300,16 +338,29 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
         return result
     }
 
-    /// IKZE is not a trading account the socket streams; xStation shows it in its own view, opened
-    /// from the side bar. Its numbers are read from that view's text.
-    /// Opens the next trading account not read yet, or finishes when all are read.
+    /// Opens the next trading account not read yet; when all are read, finishes or goes live.
     private func nextAccount() {
         guard let next = state.activeAccounts.first(where: { !collected.contains($0) }) else {
-            return finish(.snapshots(allSnapshots(now: Date())))
+            return live == nil ? finish(.snapshots(allSnapshots(now: Date()))) : startLive()
         }
         openAccount(next)
     }
 
+    /// The page streams only the account it has open, so live mode returns to the złoty account
+    /// (and its IKZE view) before it starts passing on updates.
+    private func startLive() {
+        started = .distantFuture
+        let home = state.activeAccounts.first { state.snapshot(account: $0, now: Date())?.currency == "PLN" }
+        if let home, pageAccount != home {
+            returningHome = Date()
+            return openAccount(home)
+        }
+        liveSince = Date()
+        Log.write("live: page kept open on …\(pageAccount?.suffix(3) ?? "-")")
+    }
+
+    /// IKZE is not a trading account the socket streams; xStation shows it in its own view, opened
+    /// from the side bar. Its numbers are read from that view's text.
     private func openIKZE() {
         ikzeTried = true
         let script = """
@@ -384,18 +435,31 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
         let rows: [Row]
     }
 
+    private static func ikzeSnapshot(_ result: Any?, now: Date) -> Snapshot? {
+        guard let json = result as? String, let view = try? JSONDecoder().decode(IKZEView.self, from: Data(json.utf8)) else { return nil }
+        let rows = view.rows.map { PositionRow(name: $0.name, value: $0.value, profit: $0.profit, profitPercent: $0.percent) }
+            .sorted { $0.value > $1.value }
+        return Snapshot(equity: view.value, profit: view.profit, profitPercent: view.percent, currency: "PLN",
+                        positions: rows, updatedAt: now, connected: true)
+    }
+
     private func readIKZE(now: Date) {
         webView?.evaluateJavaScript(Self.ikzeScript) { [weak self] result, _ in
             Task { @MainActor in
-                guard let self, self.continuation != nil, let json = result as? String,
-                      let view = try? JSONDecoder().decode(IKZEView.self, from: Data(json.utf8)) else { return }
-                let rows = view.rows.map { PositionRow(name: $0.name, value: $0.value, profit: $0.profit, profitPercent: $0.percent) }
-                    .sorted { $0.value > $1.value }
-                self.ikze = Snapshot(equity: view.value, profit: view.profit, profitPercent: view.percent, currency: "PLN",
-                                     positions: rows, updatedAt: now, connected: true)
-                Log.write("IKZE read: \(rows.count) positions")
+                guard let self, self.continuation != nil, let snapshot = Self.ikzeSnapshot(result, now: now) else { return }
+                self.ikze = snapshot
+                Log.write("IKZE read: \(snapshot.positions.count) positions")
                 self.ikzeOpened = nil
                 self.nextAccount()
+            }
+        }
+    }
+
+    /// Live mode: re-reads the IKZE view if it is on screen; keeps the last values otherwise.
+    private func refreshIKZE(now: Date) {
+        webView?.evaluateJavaScript(Self.ikzeScript) { [weak self] result, _ in
+            Task { @MainActor in
+                if let snapshot = Self.ikzeSnapshot(result, now: now) { self?.ikze = snapshot }
             }
         }
     }
@@ -415,6 +479,7 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
             Task { @MainActor in
                 guard let self, self.continuation != nil else { return }
                 Log.write("switch to account …\(accountNo.suffix(3)): \((result as? Bool) == true ? "clicked" : "not found")")
+                if (result as? Bool) == true { self.pageAccount = accountNo }
                 if (result as? Bool) != true {
                     self.collected.insert(accountNo)
                     self.finish(.snapshots(self.state.snapshots(now: Date())))

@@ -25,6 +25,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let rates = ExchangeRates()
     private var statusItem: StatusItemController!
     private var reader: PageReader?
+    /// True while `reader` is a live session that keeps xStation open.
+    private var readerIsLive = false
+    private var lastSample = Date.distantPast
     private var timer: Timer?
     private var problem: String?
     private var settingsWindow: NSWindow?
@@ -51,7 +54,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             accounts: { [SharedStore.allAccounts] + SharedStore.readAccounts().map(\.accountNo) },
             currentAccount: { [weak self] in self?.account ?? SharedStore.allAccounts },
-            setAccount: { [weak self] in self?.account = $0; self?.reload() }))
+            setAccount: { [weak self] in self?.account = $0; self?.reload() },
+            setRefreshSeconds: { [weak self] seconds in
+                guard let self else { return }
+                RefreshInterval.seconds = seconds
+                Log.write("refresh every \(RefreshInterval.label(RefreshInterval.seconds))")
+                // A live session keeps its pace until it ends, so it is ended now; the next
+                // session (or the next single read) follows the new setting.
+                if self.readerIsLive { self.reader?.stop() } else if self.reader == nil { self.scheduleNext() }
+                self.reload()
+                WidgetCenter.shared.reloadAllTimelines()
+            }))
         model.showEquityOnHover = !defaults.bool(forKey: Self.hideEquityKey)
 
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -64,7 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func statusLine() -> String {
-        if reader != nil { return "Odświeżanie…" }
+        if reader != nil, !readerIsLive { return "Odświeżanie…" }
         if let problem { return problem }
         guard let snapshot = model.snapshot else { return "Brak danych" }
         return "Dane z " + snapshot.updatedAt.formatted(date: .omitted, time: .shortened)
@@ -111,18 +124,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard reader == nil else { return }
         let reader = PageReader()
         self.reader = reader
+        let live: TimeInterval? = !interactive && RefreshInterval.isLive ? TimeInterval(RefreshInterval.seconds) : nil
+        readerIsLive = live != nil
         if interactive { defaults.set(false, forKey: Self.loginBlockedKey) }
         let mayLogIn = !interactive && !defaults.bool(forKey: Self.loginBlockedKey)
         Task {
             let outcome = await reader.run(interactive: interactive, credentials: mayLogIn ? {
                 guard let username = Keychain.username(), let password = Keychain.password(for: username) else { return nil }
                 return (username, password)
-            } : nil)
+            } : nil, live: live, onUpdate: { [weak self] parts in
+                Task { @MainActor in
+                    guard let self else { return }
+                    let rates = await self.rates.rates(for: Set(parts.values.map(\.currency)))
+                    self.problem = nil
+                    if self.save(parts, rates: rates) { WidgetCenter.shared.reloadAllTimelines() }
+                    self.reload()
+                }
+            })
             var rates: [String: Double] = [:]
             if case .snapshots(let parts) = outcome {
                 rates = await self.rates.rates(for: Set(parts.values.map(\.currency)))
             }
             self.reader = nil
+            self.readerIsLive = false
             self.handle(outcome, rates: rates)
             self.scheduleNext()
         }
@@ -133,21 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .snapshots(let parts):
             problem = nil
             defaults.set(false, forKey: Self.loginBlockedKey)
-            adoptSingleAccountHistory(parts)
-            var known = SharedStore.readAccounts().filter { parts[$0.accountNo] == nil }
-            known += parts.map { AccountInfo(accountNo: $0.key, currency: $0.value.currency) }
-            SharedStore.writeAccounts(known.sorted { $0.accountNo < $1.accountNo })
-            var toWrite = parts
-            if let sum = Snapshot.combined(Array(parts.values), in: "PLN", rates: rates) {
-                toWrite[SharedStore.allAccounts] = sum
-            } else {
-                Log.write("sum of accounts skipped: no exchange rate")
-            }
-            for (choice, snapshot) in toWrite {
-                let store = SharedStore.store(for: choice)
-                try? store.writeSnapshot(snapshot)
-                try? store.append(Sample(t: snapshot.updatedAt, equity: snapshot.equity, profit: snapshot.profit))
-            }
+            save(parts, rates: rates)
         case .loginRequired:
             problem = "Wymaga logowania"
         case .loginRejected:
@@ -173,9 +183,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reload()
     }
 
+    /// Writes each account's snapshot and the sum. A history sample is added only when one is due,
+    /// so live updates every few seconds do not grow the history. Returns whether one was added.
+    @discardableResult
+    private func save(_ parts: [String: Snapshot], rates: [String: Double]) -> Bool {
+        guard !parts.isEmpty else { return false }
+        adoptSingleAccountHistory(parts)
+        var known = SharedStore.readAccounts().filter { parts[$0.accountNo] == nil }
+        known += parts.map { AccountInfo(accountNo: $0.key, currency: $0.value.currency) }
+        SharedStore.writeAccounts(known.sorted { $0.accountNo < $1.accountNo })
+        var toWrite = parts
+        if let sum = Snapshot.combined(Array(parts.values), in: "PLN", rates: rates) {
+            toWrite[SharedStore.allAccounts] = sum
+        } else {
+            Log.write("sum of accounts skipped: no exchange rate")
+        }
+        let sampleDue = Date().timeIntervalSince(lastSample) >= RefreshInterval.sampleSeconds - 30
+        if sampleDue { lastSample = Date() }
+        for (choice, snapshot) in toWrite {
+            let store = SharedStore.store(for: choice)
+            try? store.writeSnapshot(snapshot)
+            if sampleDue { try? store.append(Sample(t: snapshot.updatedAt, equity: snapshot.equity, profit: snapshot.profit)) }
+        }
+        return sampleDue
+    }
+
     private func scheduleNext() {
         timer?.invalidate()
-        let next = nextSampleDate(after: Date())
+        // Live: the next session starts right after one ends, unless it ended on a problem.
+        let next = RefreshInterval.isLive
+            ? Date().addingTimeInterval(problem == nil ? 2 : 5 * 60)
+            : nextSampleDate(after: Date(), every: TimeInterval(RefreshInterval.seconds))
         timer = Timer(fire: next, interval: 0, repeats: false) { [weak self] _ in
             Task { @MainActor in self?.refresh(interactive: false) }
         }

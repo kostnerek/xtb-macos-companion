@@ -8,10 +8,10 @@ public func dailyChange(currentProfit: Double, samples: [Sample], now: Date, cal
     return currentProfit - baseline.profit
 }
 
-/// The next full quarter of an hour strictly after `date`.
-public func nextSampleDate(after date: Date) -> Date {
-    let quarter: TimeInterval = 15 * 60
-    return Date(timeIntervalSince1970: (floor(date.timeIntervalSince1970 / quarter) + 1) * quarter)
+/// The next whole multiple of `interval` (counted from midnight UTC, so 15 minutes gives full
+/// quarters of an hour) strictly after `date`.
+public func nextSampleDate(after date: Date, every interval: TimeInterval = 15 * 60) -> Date {
+    Date(timeIntervalSince1970: (floor(date.timeIntervalSince1970 / interval) + 1) * interval)
 }
 
 /// Splits history where samples are further apart than `maxGap`, so a chart shows a break

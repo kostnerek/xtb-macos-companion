@@ -1,6 +1,6 @@
 import Foundation
 
-/// One point of history, taken every 15 minutes while connected.
+/// One point of history, taken at every refresh while connected.
 public struct Sample: Codable, Equatable, Sendable {
     public let t: Date
     public let equity: Double

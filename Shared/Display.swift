@@ -3,8 +3,7 @@ import XTBKit
 
 /// What the menu bar and the widget show, worked out from the files the app writes.
 struct Display {
-    /// A snapshot older than this is shown as stale (one missed refresh plus slack).
-    static let staleAfter: TimeInterval = 20 * 60
+    static var staleAfter: TimeInterval { RefreshInterval.staleAfter }
 
     let snapshot: Snapshot?
     let chart: [[Double]]
@@ -15,12 +14,47 @@ struct Display {
     init(store: SampleStore, range: ChartRange, now: Date) {
         let snapshot = store.readSnapshot()
         self.snapshot = snapshot
-        chart = segments(store.samples(in: range, now: now), maxGap: 45 * 60).map { $0.map(\.profit) }
+        // A break in the chart only where at least two refreshes in a row are missing.
+        let maxGap = max(45 * 60, 3 * RefreshInterval.sampleSeconds)
+        chart = segments(store.samples(in: range, now: now), maxGap: maxGap).map { $0.map(\.profit) }
         dailyChange = snapshot.flatMap {
             XTBKit.dailyChange(currentProfit: $0.profit, samples: store.samples(in: .all, now: now), now: now, calendar: .current)
         }
         stale = snapshot.map { !$0.connected || now.timeIntervalSince($0.updatedAt) > Self.staleAfter } ?? true
     }
+}
+
+/// How often the app refreshes, chosen in the menu. Kept in the shared container because the
+/// widget needs it too, to know when data is stale. Between 5 and 60 minutes every refresh opens
+/// xStation, reads it (about 20 seconds) and closes it again. Below a minute ("live") xStation stays
+/// open in the background instead and the numbers are re-read from it every 10 or 30 seconds.
+enum RefreshInterval {
+    static let choices = [10, 30, 5 * 60, 10 * 60, 15 * 60, 30 * 60, 60 * 60]
+    static let standard = 15 * 60
+    /// In live mode history is still sampled at this pace, so the file does not grow every few seconds.
+    static let liveSampleSeconds: TimeInterval = 15 * 60
+
+    private struct Settings: Codable { var refreshSeconds: Int }
+    private static var url: URL { SharedStore.directory.appendingPathComponent("settings.json") }
+
+    static var seconds: Int {
+        get {
+            let stored = (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode(Settings.self, from: $0) }?.refreshSeconds
+            return stored.flatMap { choices.contains($0) ? $0 : nil } ?? standard
+        }
+        set {
+            try? JSONEncoder().encode(Settings(refreshSeconds: choices.contains(newValue) ? newValue : standard))
+                .write(to: url, options: .atomic)
+        }
+    }
+
+    static var isLive: Bool { seconds < 60 }
+    /// How often a history sample is written.
+    static var sampleSeconds: TimeInterval { isLive ? liveSampleSeconds : TimeInterval(seconds) }
+    /// A snapshot older than this is shown as stale.
+    static var staleAfter: TimeInterval { isLive ? 2 * 60 : TimeInterval(seconds) + 5 * 60 }
+
+    static func label(_ seconds: Int) -> String { seconds < 60 ? "\(seconds) s (na żywo)" : "\(seconds / 60) min" }
 }
 
 /// An account the app has seen, listed in the menu and in "Edit Widget".

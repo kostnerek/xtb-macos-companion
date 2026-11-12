@@ -103,7 +103,7 @@ struct Entry: TimelineEntry {
 }
 
 /// Reads what the app wrote; never touches the network. The app asks for a reload after each
-/// refresh; the widget also reloads itself shortly after each quarter-hour sample, so a missed
+/// refresh; the widget also reloads itself shortly after each scheduled refresh, so a missed
 /// reload request never leaves it showing old data for long.
 struct Provider: AppIntentTimelineProvider {
     private func entry(_ configuration: RangeIntent, at date: Date) -> Entry {
@@ -124,7 +124,7 @@ struct Provider: AppIntentTimelineProvider {
         if !now.display.stale, let updated = now.display.snapshot?.updatedAt {
             entries.append(entry(configuration, at: updated.addingTimeInterval(Display.staleAfter + 1)))
         }
-        return Timeline(entries: entries, policy: .after(nextSampleDate(after: Date()).addingTimeInterval(90)))
+        return Timeline(entries: entries, policy: .after(nextSampleDate(after: Date(), every: RefreshInterval.sampleSeconds).addingTimeInterval(90)))
     }
 }
 

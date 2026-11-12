@@ -21,6 +21,7 @@ final class StatusItemController: NSResponder, NSMenuDelegate {
         var accounts: () -> [String]
         var currentAccount: () -> String
         var setAccount: (String) -> Void
+        var setRefreshSeconds: (Int) -> Void
     }
 
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -84,11 +85,28 @@ final class StatusItemController: NSResponder, NSMenuDelegate {
             accounts.submenu?.addItem(entry)
         }
         menu.addItem(accounts)
+        let refreshing = NSMenuItem(title: "Odświeżaj co", action: nil, keyEquivalent: "")
+        refreshing.submenu = NSMenu()
+        refreshing.submenu?.autoenablesItems = false
+        for seconds in RefreshInterval.choices {
+            let entry = item(RefreshInterval.label(seconds), #selector(pickRefresh(_:)))
+            entry.tag = seconds
+            entry.state = seconds == RefreshInterval.seconds ? .on : .off
+            refreshing.submenu?.addItem(entry)
+        }
+        menu.addItem(refreshing)
         let equity = item("Wartość konta po najechaniu", #selector(toggleEquity))
         equity.state = model.showEquityOnHover ? .on : .off
         menu.addItem(equity)
         menu.addItem(item("Login i hasło…", #selector(settings)))
         menu.addItem(.separator())
+        if RefreshInterval.isLive {
+            // Live mode keeps a page open in the background; say so where the owner will see it.
+            for note in ["Na żywo: xStation zostaje otwarty w tle", "(więcej pamięci i prądu, pozostałe rachunki co 15 min)"] {
+                menu.addItem(withTitle: note, action: nil, keyEquivalent: "").isEnabled = false
+            }
+            menu.addItem(.separator())
+        }
         menu.addItem(withTitle: "Zakończ", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
 
@@ -144,6 +162,7 @@ final class StatusItemController: NSResponder, NSMenuDelegate {
     @objc private func logIn() { actions.logInInWindow() }
     @objc private func settings() { actions.openSettings() }
     @objc private func toggleEquity() { actions.toggleEquityOnHover() }
+    @objc private func pickRefresh(_ sender: NSMenuItem) { actions.setRefreshSeconds(sender.tag) }
     @objc private func pickAccount(_ sender: NSMenuItem) {
         if let choice = sender.representedObject as? String { actions.setAccount(choice) }
     }

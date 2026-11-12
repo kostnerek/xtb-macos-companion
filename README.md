@@ -11,7 +11,11 @@ Twoje konta XTB w pasku menu i w widgecie na pulpicie macOS, bez otwierania xSta
 
 ## Jak to działa
 
-Co 15 minut (oraz po wybudzeniu Maca) aplikacja otwiera xStation 5 w ukrytym oknie WebKit:
+Co 15 minut (do zmiany w menu: **Odświeżaj co** 5, 10, 15, 30 lub 60 minut) oraz po wybudzeniu Maca aplikacja otwiera xStation 5 w ukrytym oknie WebKit, odczytuje je (ok. 20 sekund) i zamyka.
+
+Opcje **10 s** i **30 s** to tryb na żywo: xStation zostaje otwarty w tle na rachunku złotówkowym z widokiem IKZE, a liczby są odczytywane z niego co 10 lub 30 sekund. Zajmuje to więcej pamięci i prądu. Pozostałe rachunki odświeżają się wtedy co 15 minut, a historia wykresu też zapisuje się co 15 minut.
+
+Każdy odczyt przebiega tak:
 
 1. Jeśli sesja wygasła, loguje się loginem i hasłem z pęku kluczy. Gdy XTB poprosi o kod SMS, aplikacja przestaje próbować sama i prosi o zalogowanie się w oknie.
 2. Odczytuje wiadomości, które strona dostaje przez swoje połączenie (saldo, pozycje, zyski, nazwy instrumentów), a nie same piksele.
