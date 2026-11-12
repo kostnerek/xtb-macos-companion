@@ -102,11 +102,17 @@ func post(_ path: String, _ body: [String: Any]) async throws -> (status: Int, j
     req.httpMethod = "POST"
     req.httpBody = try JSONSerialization.data(withJSONObject: body)
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    req.setValue("application/json", forHTTPHeaderField: "Accept")
-    req.setValue(TimeZone.current.identifier, forHTTPHeaderField: "Time-Zone")
+    // The API expects Time-Zone as the UTC offset in minutes.
+    req.setValue("*/*", forHTTPHeaderField: "Accept")
+    req.setValue(String(TimeZone.current.secondsFromGMT() / 60), forHTTPHeaderField: "Time-Zone")
     let (data, resp) = try await http.data(for: req)
-    let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
-    return ((resp as? HTTPURLResponse)?.statusCode ?? -1, json)
+    let httpResp = resp as? HTTPURLResponse
+    guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+        let head = scrub(String(data: data.prefix(300), encoding: .utf8) ?? "<binary>").replacingOccurrences(of: "\n", with: " ")
+        print("  non-JSON response: content-type=\(httpResp?.value(forHTTPHeaderField: "Content-Type") ?? "-") bytes=\(data.count) server=\(httpResp?.value(forHTTPHeaderField: "Server") ?? "-") head=\(head.prefix(200))")
+        return (httpResp?.statusCode ?? -1, [:])
+    }
+    return (httpResp?.statusCode ?? -1, json)
 }
 func describe(_ json: [String: Any]) -> String {
     json.keys.sorted().map { k in
@@ -138,7 +144,6 @@ secrets[serviceTicket] = "<SERVICE_TICKET>"
 // MARK: Socket
 
 var wsRequest = URLRequest(url: URL(string: "wss://api5reala.x-station.eu/v1/xstation")!)
-wsRequest.setValue("https://xstation5.xtb.com", forHTTPHeaderField: "Origin")
 let ws = http.webSocketTask(with: wsRequest)
 ws.maximumMessageSize = 64 * 1024 * 1024
 ws.resume()
@@ -256,9 +261,9 @@ func receiveLoop() {
 receiveLoop()
 
 send("registerClientInfo", ["endpoint": "", "registerClientInfo": ["clientInfo": [
-    "appName": "xStation5 | xStation 5", "appVersion": "2.111.0", "appBuildNumber": "",
-    "device": "macOS 10.15.7 / Chrome 156.0", "osVersion": "",
-    "comment": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+    "appName": "xtb-widget", "appVersion": "0.1", "appBuildNumber": "",
+    "device": "macOS", "osVersion": "",
+    "comment": "personal read-only portfolio viewer",
     "apiVersion": "2.73.0", "osType": 0, "deviceType": 1,
 ]]])
 
