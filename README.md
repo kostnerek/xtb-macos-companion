@@ -42,7 +42,7 @@ Okno jest wyciszone, a po każdym odświeżeniu zamykane.
    xcodegen
    xcodebuild -project XTBBar.xcodeproj -scheme XTBBar -configuration Release -allowProvisioningUpdates build
    ```
-3. Skopiuj `XTBBar.app` z katalogu produktów do `/Applications` i uruchom. Aplikacja dopisze się do elementów otwieranych przy logowaniu.
+3. Skopiuj `XTBBar.app` z katalogu produktów do `/Applications` i uruchom. Przy pierwszym uruchomieniu aplikacja dopisze się do autostartu. Wyłączysz to w menu: **Uruchamiaj przy logowaniu**.
 
 ## Pierwsze uruchomienie
 

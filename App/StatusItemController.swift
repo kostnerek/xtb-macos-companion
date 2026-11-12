@@ -21,6 +21,8 @@ final class StatusItemController: NSResponder, NSMenuDelegate {
         var accounts: () -> [String]
         var currentAccount: () -> String
         var setAccount: (String) -> Void
+        var opensAtLogin: () -> Bool
+        var toggleOpenAtLogin: () -> Void
         var setRefreshSeconds: (Int) -> Void
     }
 
@@ -98,6 +100,9 @@ final class StatusItemController: NSResponder, NSMenuDelegate {
         let equity = item("Wartość konta po najechaniu", #selector(toggleEquity))
         equity.state = model.showEquityOnHover ? .on : .off
         menu.addItem(equity)
+        let autostart = item("Uruchamiaj przy logowaniu", #selector(toggleAutostart))
+        autostart.state = actions.opensAtLogin() ? .on : .off
+        menu.addItem(autostart)
         menu.addItem(item("Login i hasło…", #selector(settings)))
         menu.addItem(.separator())
         if RefreshInterval.isLive {
@@ -162,6 +167,7 @@ final class StatusItemController: NSResponder, NSMenuDelegate {
     @objc private func logIn() { actions.logInInWindow() }
     @objc private func settings() { actions.openSettings() }
     @objc private func toggleEquity() { actions.toggleEquityOnHover() }
+    @objc private func toggleAutostart() { actions.toggleOpenAtLogin() }
     @objc private func pickRefresh(_ sender: NSMenuItem) { actions.setRefreshSeconds(sender.tag) }
     @objc private func pickAccount(_ sender: NSMenuItem) {
         if let choice = sender.representedObject as? String { actions.setAccount(choice) }

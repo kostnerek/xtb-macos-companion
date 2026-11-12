@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private static let hideEquityKey = "hideEquityOnHover"
     private static let accountKey = "menuBarAccount"
+    private static let loginItemSetKey = "loginItemSet"
     /// Set after the saved login was rejected, so the app never retries a bad password on its own.
     private static let loginBlockedKey = "loginBlocked"
 
@@ -55,6 +56,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             accounts: { [SharedStore.allAccounts] + SharedStore.readAccounts().map(\.accountNo) },
             currentAccount: { [weak self] in self?.account ?? SharedStore.allAccounts },
             setAccount: { [weak self] in self?.account = $0; self?.reload() },
+            opensAtLogin: { SMAppService.mainApp.status == .enabled },
+            toggleOpenAtLogin: { [weak self] in self?.setOpenAtLogin(SMAppService.mainApp.status != .enabled) },
             setRefreshSeconds: { [weak self] seconds in
                 guard let self else { return }
                 RefreshInterval.seconds = seconds
@@ -70,10 +73,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.refresh(interactive: false) }
         }
-        try? SMAppService.mainApp.register()
+        // Opens at login by default, once; after that the menu switch decides.
+        if !defaults.bool(forKey: Self.loginItemSetKey) {
+            defaults.set(true, forKey: Self.loginItemSetKey)
+            setOpenAtLogin(true)
+        }
+        Log.write("open at login: \(SMAppService.mainApp.status == .enabled ? "on" : "off (\(SMAppService.mainApp.status.rawValue))")")
 
         reload()
         refresh(interactive: false)
+    }
+
+    /// Adds or removes the app from the login items. When macOS wants the owner's approval first,
+    /// opens the Login Items settings.
+    private func setOpenAtLogin(_ on: Bool) {
+        do {
+            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+        } catch {
+            Log.write("open at login \(on ? "on" : "off") failed: \(error.localizedDescription)")
+        }
+        if on, SMAppService.mainApp.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
     }
 
     private func statusLine() -> String {
