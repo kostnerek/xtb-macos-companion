@@ -1,8 +1,7 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
-// Sources/xtb-spike is intentionally not a target: it was the exploratory native client
-// and is not part of the app.
+// XTBKit: decoding xStation's messages, folding them into per-account snapshots, and history.
 let package = Package(
     name: "XTBKit",
     platforms: [.macOS(.v15)],
