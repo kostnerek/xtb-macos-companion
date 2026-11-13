@@ -385,7 +385,8 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
         }
     }
 
-    /// Summary and visible position rows of the IKZE view, or null until both are on screen.
+    /// Text and visible position rows of the IKZE view, or null until a row is on screen.
+    /// The numbers are read from them by XTBKit's `pensionSnapshot`.
     private static let ikzeScript = """
     (function () {
       var text = [], rows = [];
@@ -396,17 +397,11 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
         if (node.shadowRoot) { walk(node.shadowRoot); }
         Array.prototype.forEach.call(node.childNodes || [], walk);
       })(document.body);
-      var num = function (s) { return parseFloat(String(s).replace(/[\\s\\u00a0]/g, '').replace('\\u2212', '-').replace(',', '.')); };
-      var all = text.join(' ').replace(/[\\s\\u00a0]+/g, ' ');
-      var m = /IKZE Zarządzaj Inwestuj ([-\\u2212]?[\\d .,]+?) ?PLN Zysk: ?([-\\u2212+]?[\\d .,]+?) ?\\( ?([-\\u2212+]?[\\d.,]+) ?%\\)/.exec(all);
-      if (!m || !rows.length) { return null; }
+      if (!rows.length) { return null; }
       return JSON.stringify({
-        value: num(m[1]), profit: num(m[2]), percent: num(m[3]),
+        text: text.join(' ').replace(/[\\s\\u00a0]+/g, ' '),
         rows: rows.map(function (row) {
-          var lines = row.innerText.split('\\n').map(function (l) { return l.trim(); }).filter(Boolean);
-          var amounts = lines.filter(function (l) { return / PLN$/.test(l); });
-          var percent = lines.filter(function (l) { return /%$/.test(l); })[0];
-          return { name: lines[0], value: num(amounts[0]), profit: num(amounts[1]), percent: num(percent) };
+          return row.innerText.split('\\n').map(function (l) { return l.trim(); }).filter(Boolean);
         })
       });
     })()
@@ -429,18 +424,14 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
     })()
     """
 
-    private struct IKZEView: Decodable {
-        struct Row: Decodable { let name: String; let value: Double; let profit: Double; let percent: Double }
-        let value: Double, profit: Double, percent: Double
-        let rows: [Row]
+    private struct PensionPage: Decodable {
+        let text: String
+        let rows: [[String]]
     }
 
     private static func ikzeSnapshot(_ result: Any?, now: Date) -> Snapshot? {
-        guard let json = result as? String, let view = try? JSONDecoder().decode(IKZEView.self, from: Data(json.utf8)) else { return nil }
-        let rows = view.rows.map { PositionRow(name: $0.name, value: $0.value, profit: $0.profit, profitPercent: $0.percent) }
-            .sorted { $0.value > $1.value }
-        return Snapshot(equity: view.value, profit: view.profit, profitPercent: view.percent, currency: "PLN",
-                        positions: rows, updatedAt: now, connected: true)
+        guard let json = result as? String, let page = try? JSONDecoder().decode(PensionPage.self, from: Data(json.utf8)) else { return nil }
+        return pensionSnapshot(label: "IKZE", text: page.text, rows: page.rows, now: now)
     }
 
     private func readIKZE(now: Date) {
