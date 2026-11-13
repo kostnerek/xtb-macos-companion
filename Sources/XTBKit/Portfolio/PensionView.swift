@@ -50,3 +50,10 @@ private func amountValue(_ text: String) -> Double? {
     let cleaned = text.filter { !$0.isWhitespace }.replacingOccurrences(of: ",", with: ".")
     return Double(cleaned.hasPrefix("+") ? String(cleaned.dropFirst()) : cleaned)
 }
+
+/// Whether the view offers to open the account ("Otwórz konto IKZE") instead of showing it,
+/// which is what someone without that account sees after clicking it in the side bar.
+public func pensionAccountMissing(label: String, text: String) -> Bool {
+    let pattern = "Otwórz konto \(NSRegularExpression.escapedPattern(for: label))(?: |$)"
+    return text.range(of: pattern, options: .regularExpression) != nil
+}

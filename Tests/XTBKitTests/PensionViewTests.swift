@@ -67,3 +67,21 @@ final class PensionViewTests: XCTestCase {
         XCTAssertEqual(snapshot.positions, [PositionRow(name: "Delta", value: 300, profit: -20, profitPercent: -6.25)])
     }
 }
+
+/// Someone without the account sees an offer to open one in its place.
+final class PensionAccountMissingTests: XCTestCase {
+    private let offer = "Odkładaj na emeryturę Oszczędzaj na emeryturę. Środki na IKZE podlegają dziedziczeniu. Otwórz konto IKZE Korzystaj z odliczeń"
+
+    func testOfferToOpenTheAccountMeansMissing() {
+        XCTAssertTrue(pensionAccountMissing(label: "IKZE", text: offer))
+    }
+
+    func testOfferForAnotherAccountDoesNotCount() {
+        XCTAssertFalse(pensionAccountMissing(label: "IKE", text: offer))
+        XCTAssertFalse(pensionAccountMissing(label: "IKZE", text: "Otwórz konto IKE Korzystaj"))
+    }
+
+    func testAccountViewIsNotMissing() {
+        XCTAssertFalse(pensionAccountMissing(label: "IKE", text: "IKE Zarządzaj Inwestuj 1 000.00 PLN Zysk: 10.00 (1.01%)"))
+    }
+}

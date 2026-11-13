@@ -399,8 +399,8 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
         }
     }
 
-    /// Text and visible position rows of a pension account's view, or null until a row is on
-    /// screen. The numbers are read from them by XTBKit's `pensionSnapshot`.
+    /// Text and visible position rows of a pension account's view. The numbers are read from them
+    /// by XTBKit's `pensionSnapshot`, which waits until a row is on screen.
     private static let pensionScript = """
     (function () {
       var text = [], rows = [];
@@ -411,7 +411,6 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
         if (node.shadowRoot) { walk(node.shadowRoot); }
         Array.prototype.forEach.call(node.childNodes || [], walk);
       })(document.body);
-      if (!rows.length) { return null; }
       return JSON.stringify({
         text: text.join(' ').replace(/[\\s\\u00a0]+/g, ' '),
         rows: rows.map(function (row) {
@@ -443,16 +442,25 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
         let rows: [[String]]
     }
 
+    private static func page(_ result: Any?) -> PensionPage? {
+        (result as? String).flatMap { try? JSONDecoder().decode(PensionPage.self, from: Data($0.utf8)) }
+    }
+
     private static func snapshot(of account: PensionAccount, _ result: Any?, now: Date) -> Snapshot? {
-        guard let json = result as? String, let page = try? JSONDecoder().decode(PensionPage.self, from: Data(json.utf8)) else { return nil }
-        return pensionSnapshot(label: account.label, text: page.text, rows: page.rows, now: now)
+        page(result).flatMap { pensionSnapshot(label: account.label, text: $0.text, rows: $0.rows, now: now) }
     }
 
     private func readPension(_ account: PensionAccount, now: Date) {
         webView?.evaluateJavaScript(Self.pensionScript) { [weak self] result, _ in
             Task { @MainActor in
-                guard let self, self.continuation != nil, self.pensionOpen?.account == account,
-                      let snapshot = Self.snapshot(of: account, result, now: now) else { return }
+                guard let self, self.continuation != nil, self.pensionOpen?.account == account else { return }
+                // Without the account, xStation offers to open one; there is nothing to wait for.
+                if let page = Self.page(result), pensionAccountMissing(label: account.label, text: page.text) {
+                    Log.write("\(account.label): no such account, skipped")
+                    self.pensionOpen = nil
+                    return self.openNextPension()
+                }
+                guard let snapshot = Self.snapshot(of: account, result, now: now) else { return }
                 self.pensions[account] = snapshot
                 self.pensionOnScreen = account
                 Log.write("\(account.label) read: \(snapshot.positions.count) positions")
