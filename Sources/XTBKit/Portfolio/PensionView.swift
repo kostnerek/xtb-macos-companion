@@ -1,5 +1,14 @@
 import Foundation
 
+/// Pension accounts xStation shows in their own views, in the order they are read.
+/// The raw value is the key their snapshots and history are saved under.
+public enum PensionAccount: String, CaseIterable, Sendable {
+    case ikze, ike
+
+    /// The account's name in xStation's side bar and at the top of its view.
+    public var label: String { rawValue.uppercased() }
+}
+
 /// Reads a pension account (IKE, IKZE) from the text of its xStation view. These accounts do not
 /// come through the page's socket, so their numbers are taken from what the view shows.
 ///

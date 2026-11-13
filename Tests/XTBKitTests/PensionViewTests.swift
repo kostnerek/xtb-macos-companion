@@ -52,6 +52,15 @@ final class PensionViewTests: XCTestCase {
         XCTAssertNil(pensionSnapshot(label: "IKE", text: text, rows: [], now: now))
     }
 
+    /// IKZE keeps the "ikze" key so its saved history stays; IKZE is read before IKE.
+    func testPensionAccountsKeysLabelsAndOrder() {
+        XCTAssertEqual(PensionAccount.allCases, [.ikze, .ike])
+        XCTAssertEqual(PensionAccount.ikze.rawValue, "ikze")
+        XCTAssertEqual(PensionAccount.ike.rawValue, "ike")
+        XCTAssertEqual(PensionAccount.ikze.label, "IKZE")
+        XCTAssertEqual(PensionAccount.ike.label, "IKE")
+    }
+
     func testRowWithoutAmountsIsSkipped() throws {
         let text = "IKE Zarządzaj Inwestuj 1 000.00 PLN Zysk: 10.00 (1.01%)"
         let snapshot = try XCTUnwrap(pensionSnapshot(label: "IKE", text: text, rows: [["Gamma", "Akcje"], row], now: now))
