@@ -62,7 +62,11 @@ struct AccountInfo: Codable, Equatable {
     let accountNo: String
     let currency: String
 
-    var label: String { accountNo == SharedStore.ikze ? "IKZE (\(currency))" : "Rachunek …\(accountNo.suffix(3)) (\(currency))" }
+    /// Pension accounts have no trading account number; they are kept under `PensionAccount`'s keys.
+    var label: String {
+        if let pension = PensionAccount(rawValue: accountNo) { return "\(pension.label) (\(currency))" }
+        return "Rachunek …\(accountNo.suffix(3)) (\(currency))"
+    }
 }
 
 /// The folder both the app and the widget read: the App Group container. Its identifier comes
@@ -72,8 +76,6 @@ enum SharedStore {
     /// The choice that means "all accounts summed in PLN".
     static let allAccounts = "all"
     static let allAccountsLabel = "Wszystkie konta (PLN)"
-    /// IKZE has no trading account number in xStation's account list, so it gets this key.
-    static let ikze = "ikze"
 
     static let directory: URL = {
         let fallback = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

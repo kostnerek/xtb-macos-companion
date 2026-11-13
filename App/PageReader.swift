@@ -26,8 +26,8 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
     /// How long to keep collecting after the first balance, so positions and names arrive too.
     private static let settleSeconds: TimeInterval = 6
     private static let hiddenTimeout: TimeInterval = 90
-    /// How long the IKZE view may take to show its numbers before it is skipped.
-    private static let ikzeTimeout: TimeInterval = 20
+    /// How long a pension account's view may take to show its numbers before it is skipped.
+    private static let pensionTimeout: TimeInterval = 20
     /// A live session ends after this long, so the next one reads every account afresh.
     private static let liveCycle: TimeInterval = 15 * 60
     /// After switching back to the złoty account, how long to let the page load.
@@ -131,10 +131,14 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
     private var firstData: Date?
     private var current: String?
     private var collected: Set<String> = []
-    /// Set once the IKZE view was opened; nil before that.
-    private var ikzeOpened: Date?
-    private var ikzeTried = false
-    private var ikze: Snapshot?
+    private var pensionsTried = false
+    /// Pension accounts still to open in this pass.
+    private var pensionQueue: [PensionAccount] = []
+    /// The pension account whose view was opened and is being read, and since when.
+    private var pensionOpen: (account: PensionAccount, since: Date)?
+    private var pensions: [PensionAccount: Snapshot] = [:]
+    /// The pension account whose view the page shows; live mode re-reads only this one.
+    private var pensionOnScreen: PensionAccount?
     private var loginSubmitted: Date?
     private var interactive = false
     private var received = 0
@@ -223,13 +227,13 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
         let now = Date()
         if let back = returningHome, now.timeIntervalSince(back) >= Self.returnSeconds {
             returningHome = nil
-            return openIKZE()
+            return openPensions()
         }
         if let since = liveSince, let live {
             if now.timeIntervalSince(since) > Self.liveCycle { return finish(.snapshots(allSnapshots(now: now))) }
             if now.timeIntervalSince(lastEmit) >= live {
                 lastEmit = now
-                refreshIKZE(now: now)
+                refreshPension(now: now)
                 onUpdate?(allSnapshots(now: now))
             }
         }
@@ -237,8 +241,8 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
             collected.insert(current)
             self.firstData = nil
             self.current = nil
-            // The IKZE view only loads while the złoty account is open, so read it right then.
-            if !ikzeTried, state.snapshot(account: current, now: now)?.currency == "PLN" { return openIKZE() }
+            // Pension account views only load while the złoty account is open, so read them right then.
+            if !pensionsTried, state.snapshot(account: current, now: now)?.currency == "PLN" { return openPensions() }
             return nextAccount()
         }
         if now.timeIntervalSince(started) > (interactive ? Self.interactiveTimeout : Self.hiddenTimeout) {
@@ -259,19 +263,19 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
             started = .distantFuture
             return
         }
-        if let opened = ikzeOpened {
-            if now.timeIntervalSince(opened) > Self.ikzeTimeout {
-                ikzeOpened = .distantFuture
-                webView?.evaluateJavaScript(Self.ikzeDiagnostics) { [weak self] result, _ in
+        if let open = pensionOpen {
+            if now.timeIntervalSince(open.since) > Self.pensionTimeout {
+                pensionOpen = (open.account, .distantFuture)
+                webView?.evaluateJavaScript(Self.pensionDiagnostics) { [weak self] result, _ in
                     Task { @MainActor in
-                        Log.write("IKZE view did not show its numbers in time: \(result ?? "-")")
-                        self?.ikzeOpened = nil
-                        self?.nextAccount()
+                        Log.write("\(open.account.label) view did not show its numbers in time: \(result ?? "-")")
+                        self?.pensionOpen = nil
+                        self?.openNextPension()
                     }
                 }
                 return
             }
-            return readIKZE(now: now)
+            return readPension(open.account, now: now)
         }
         guard firstData == nil, !interactive else { return }
         webView?.evaluateJavaScript(Self.loginState) { [weak self] result, _ in
@@ -331,10 +335,10 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
         }
     }
 
-    /// Trading accounts from the socket, plus IKZE read from its view when it was found.
+    /// Trading accounts from the socket, plus the pension accounts read from their views.
     private func allSnapshots(now: Date) -> [String: Snapshot] {
         var result = state.snapshots(now: now)
-        result[SharedStore.ikze] = ikze
+        for (account, snapshot) in pensions { result[account.rawValue] = snapshot }
         return result
     }
 
@@ -347,7 +351,7 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
     }
 
     /// The page streams only the account it has open, so live mode returns to the złoty account
-    /// (and its IKZE view) before it starts passing on updates.
+    /// (and its pension account views) before it starts passing on updates.
     private func startLive() {
         started = .distantFuture
         let home = state.activeAccounts.first { state.snapshot(account: $0, now: Date())?.currency == "PLN" }
@@ -359,15 +363,25 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
         Log.write("live: page kept open on …\(pageAccount?.suffix(3) ?? "-")")
     }
 
-    /// IKZE is not a trading account the socket streams; xStation shows it in its own view, opened
-    /// from the side bar. Its numbers are read from that view's text.
-    private func openIKZE() {
-        ikzeTried = true
+    /// Pension accounts (IKE, IKZE) are not trading accounts the socket streams; xStation shows each
+    /// in its own view, opened from the side bar. Opens them one after another; the last one found
+    /// stays on screen.
+    private func openPensions() {
+        pensionsTried = true
+        pensionQueue = PensionAccount.allCases
+        openNextPension()
+    }
+
+    /// Opens the next pension account in the queue; once the queue is empty, moves on to the next
+    /// trading account. An account missing from the side bar is skipped.
+    private func openNextPension() {
+        guard !pensionQueue.isEmpty else { return nextAccount() }
+        let account = pensionQueue.removeFirst()
         let script = """
         (function () {
           var bar = document.querySelector('xs6-home-view_featuresidebar');
           var root = bar && (bar.shadowRoot || bar);
-          var label = root && Array.prototype.find.call(root.querySelectorAll('*'), function (e) { return e.children.length === 0 && e.textContent.trim() === 'IKZE'; });
+          var label = root && Array.prototype.find.call(root.querySelectorAll('*'), function (e) { return e.children.length === 0 && e.textContent.trim() === '\(account.label)'; });
           if (!label) { return false; }
           label.click();
           return true;
@@ -377,16 +391,17 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
             Task { @MainActor in
                 guard let self, self.continuation != nil else { return }
                 guard (result as? Bool) == true else {
-                    Log.write("IKZE not in the side bar")
-                    return self.nextAccount()
+                    Log.write("\(account.label) not in the side bar")
+                    return self.openNextPension()
                 }
-                self.ikzeOpened = Date()
+                self.pensionOpen = (account, Date())
             }
         }
     }
 
-    /// Summary and visible position rows of the IKZE view, or null until both are on screen.
-    private static let ikzeScript = """
+    /// Text and visible position rows of a pension account's view. The numbers are read from them
+    /// by XTBKit's `pensionSnapshot`, which waits until a row is on screen.
+    private static let pensionScript = """
     (function () {
       var text = [], rows = [];
       (function walk(node) {
@@ -396,24 +411,17 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
         if (node.shadowRoot) { walk(node.shadowRoot); }
         Array.prototype.forEach.call(node.childNodes || [], walk);
       })(document.body);
-      var num = function (s) { return parseFloat(String(s).replace(/[\\s\\u00a0]/g, '').replace('\\u2212', '-').replace(',', '.')); };
-      var all = text.join(' ').replace(/[\\s\\u00a0]+/g, ' ');
-      var m = /IKZE Zarządzaj Inwestuj ([-\\u2212]?[\\d .,]+?) ?PLN Zysk: ?([-\\u2212+]?[\\d .,]+?) ?\\( ?([-\\u2212+]?[\\d.,]+) ?%\\)/.exec(all);
-      if (!m || !rows.length) { return null; }
       return JSON.stringify({
-        value: num(m[1]), profit: num(m[2]), percent: num(m[3]),
+        text: text.join(' ').replace(/[\\s\\u00a0]+/g, ' '),
         rows: rows.map(function (row) {
-          var lines = row.innerText.split('\\n').map(function (l) { return l.trim(); }).filter(Boolean);
-          var amounts = lines.filter(function (l) { return / PLN$/.test(l); });
-          var percent = lines.filter(function (l) { return /%$/.test(l); })[0];
-          return { name: lines[0], value: num(amounts[0]), profit: num(amounts[1]), percent: num(percent) };
+          return row.innerText.split('\\n').map(function (l) { return l.trim(); }).filter(Boolean);
         })
       });
     })()
     """
 
-    /// What the IKZE view looked like when reading it gave up. Labels and row counts only.
-    private static let ikzeDiagnostics = """
+    /// What a pension account's view looked like when reading it gave up. Labels and row counts only.
+    private static let pensionDiagnostics = """
     (function () {
       var text = [], rows = 0;
       (function walk(node) {
@@ -429,37 +437,45 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
     })()
     """
 
-    private struct IKZEView: Decodable {
-        struct Row: Decodable { let name: String; let value: Double; let profit: Double; let percent: Double }
-        let value: Double, profit: Double, percent: Double
-        let rows: [Row]
+    private struct PensionPage: Decodable {
+        let text: String
+        let rows: [[String]]
     }
 
-    private static func ikzeSnapshot(_ result: Any?, now: Date) -> Snapshot? {
-        guard let json = result as? String, let view = try? JSONDecoder().decode(IKZEView.self, from: Data(json.utf8)) else { return nil }
-        let rows = view.rows.map { PositionRow(name: $0.name, value: $0.value, profit: $0.profit, profitPercent: $0.percent) }
-            .sorted { $0.value > $1.value }
-        return Snapshot(equity: view.value, profit: view.profit, profitPercent: view.percent, currency: "PLN",
-                        positions: rows, updatedAt: now, connected: true)
+    private static func page(_ result: Any?) -> PensionPage? {
+        (result as? String).flatMap { try? JSONDecoder().decode(PensionPage.self, from: Data($0.utf8)) }
     }
 
-    private func readIKZE(now: Date) {
-        webView?.evaluateJavaScript(Self.ikzeScript) { [weak self] result, _ in
+    private static func snapshot(of account: PensionAccount, _ result: Any?, now: Date) -> Snapshot? {
+        page(result).flatMap { pensionSnapshot(label: account.label, text: $0.text, rows: $0.rows, now: now) }
+    }
+
+    private func readPension(_ account: PensionAccount, now: Date) {
+        webView?.evaluateJavaScript(Self.pensionScript) { [weak self] result, _ in
             Task { @MainActor in
-                guard let self, self.continuation != nil, let snapshot = Self.ikzeSnapshot(result, now: now) else { return }
-                self.ikze = snapshot
-                Log.write("IKZE read: \(snapshot.positions.count) positions")
-                self.ikzeOpened = nil
-                self.nextAccount()
+                guard let self, self.continuation != nil, self.pensionOpen?.account == account else { return }
+                // Without the account, xStation offers to open one; there is nothing to wait for.
+                if let page = Self.page(result), pensionAccountMissing(label: account.label, text: page.text) {
+                    Log.write("\(account.label): no such account, skipped")
+                    self.pensionOpen = nil
+                    return self.openNextPension()
+                }
+                guard let snapshot = Self.snapshot(of: account, result, now: now) else { return }
+                self.pensions[account] = snapshot
+                self.pensionOnScreen = account
+                Log.write("\(account.label) read: \(snapshot.positions.count) positions")
+                self.pensionOpen = nil
+                self.openNextPension()
             }
         }
     }
 
-    /// Live mode: re-reads the IKZE view if it is on screen; keeps the last values otherwise.
-    private func refreshIKZE(now: Date) {
-        webView?.evaluateJavaScript(Self.ikzeScript) { [weak self] result, _ in
+    /// Live mode: re-reads the pension account on screen; keeps the last values otherwise.
+    private func refreshPension(now: Date) {
+        guard let account = pensionOnScreen else { return }
+        webView?.evaluateJavaScript(Self.pensionScript) { [weak self] result, _ in
             Task { @MainActor in
-                if let snapshot = Self.ikzeSnapshot(result, now: now) { self?.ikze = snapshot }
+                if let snapshot = Self.snapshot(of: account, result, now: now) { self?.pensions[account] = snapshot }
             }
         }
     }
@@ -482,7 +498,7 @@ final class PageReader: NSObject, WKScriptMessageHandler, NSWindowDelegate, WKNa
                 if (result as? Bool) == true { self.pageAccount = accountNo }
                 if (result as? Bool) != true {
                     self.collected.insert(accountNo)
-                    self.finish(.snapshots(self.state.snapshots(now: Date())))
+                    self.finish(.snapshots(self.allSnapshots(now: Date())))
                 }
             }
         }

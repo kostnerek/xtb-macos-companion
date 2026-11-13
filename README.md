@@ -4,7 +4,7 @@ Twoje konta XTB w pasku menu i w widgecie na pulpicie macOS, bez otwierania xSta
 
 - **Pasek menu:** łączny zysk. Po najechaniu pokazuje też wartość konta i dzisiejszą zmianę, a po kliknięciu menu z sumami, każdym kontem i wszystkimi pozycjami.
 - **Widget:** cztery rozmiary (od małego do bardzo dużego). Zysk, zmiana dzienna, wykres i lista pozycji przewijana przyciskami ▲▼.
-- **Konta:** każdy rachunek handlowy (np. PLN i EUR), IKZE oraz suma wszystkich kont w złotówkach po średnim kursie NBP.
+- **Konta:** każdy rachunek handlowy (np. PLN i EUR), IKE i IKZE oraz suma wszystkich kont w złotówkach po średnim kursie NBP.
 - **Ustawienia widgetu** („Edytuj widżet”): konto, okres wykresu (dzień, tydzień, miesiąc, wszystko), sortowanie (wartość, zysk %, zysk zł, nazwa), pokazywanie wartości konta.
 
 > **Nieoficjalne.** XTB nie udostępnia publicznego API. Aplikacja czyta dane z tej samej strony, z której korzystasz w przeglądarce. Zmiana po stronie XTB może ją zepsuć bez ostrzeżenia. Korzystasz na własne ryzyko i w zgodzie z regulaminem XTB.
@@ -13,14 +13,14 @@ Twoje konta XTB w pasku menu i w widgecie na pulpicie macOS, bez otwierania xSta
 
 Co 15 minut (do zmiany w menu: **Odświeżaj co** 5, 10, 15, 30 lub 60 minut) oraz po wybudzeniu Maca aplikacja otwiera xStation 5 w ukrytym oknie WebKit, odczytuje je (ok. 20 sekund) i zamyka.
 
-Opcje **10 s** i **30 s** to tryb na żywo: xStation zostaje otwarty w tle na rachunku złotówkowym z widokiem IKZE, a liczby są odczytywane z niego co 10 lub 30 sekund. Zajmuje to więcej pamięci i prądu. Pozostałe rachunki odświeżają się wtedy co 15 minut, a historia wykresu też zapisuje się co 15 minut.
+Opcje **10 s** i **30 s** to tryb na żywo: xStation zostaje otwarty w tle na rachunku złotówkowym z widokiem IKE lub IKZE, a liczby są odczytywane z niego co 10 lub 30 sekund. Gdy masz oba konta, na żywo odświeża się to otwarte jako ostatnie (IKE), a drugie co 15 minut. Zajmuje to więcej pamięci i prądu. Pozostałe rachunki odświeżają się wtedy co 15 minut, a historia wykresu też zapisuje się co 15 minut.
 
 Każdy odczyt przebiega tak:
 
 1. Jeśli sesja wygasła, loguje się loginem i hasłem z pęku kluczy. Gdy XTB poprosi o kod SMS, aplikacja przestaje próbować sama i prosi o zalogowanie się w oknie.
 2. Odczytuje wiadomości, które strona dostaje przez swoje połączenie (saldo, pozycje, zyski, nazwy instrumentów), a nie same piksele.
 3. Strona przesyła dane tylko otwartego rachunku, więc aplikacja przełącza po kolei rachunki w przełączniku strony.
-4. IKZE nie przychodzi tym kanałem, więc aplikacja otwiera jego widok i odczytuje z niego wartość, zysk i pozycje.
+4. IKE i IKZE nie przychodzą tym kanałem, więc aplikacja otwiera po kolei ich widoki z bocznego paska i odczytuje z nich wartość, zysk (lub stratę) i pozycje. Konta, którego nie ma w pasku, pomija.
 5. Zapisuje migawkę i próbkę historii każdego konta we wspólnym kontenerze App Group, z którego czyta widget.
 
 Okno jest wyciszone, a po każdym odświeżeniu zamykane.
@@ -69,7 +69,7 @@ Okno jest wyciszone, a po każdym odświeżeniu zamykane.
 
 ## Ograniczenia
 
-- Interfejs i odczyt IKZE zakładają polską wersję xStation.
-- Odczyt IKZE opiera się na wyglądzie strony i jest najbardziej podatny na zmiany po stronie XTB. Gdy przestanie działać, pozostałe konta działają dalej.
+- Interfejs i odczyt IKE oraz IKZE zakładają polską wersję xStation.
+- Odczyt IKE i IKZE opiera się na wyglądzie strony i jest najbardziej podatny na zmiany po stronie XTB. Gdy przestanie działać, pozostałe konta działają dalej.
 - Suma kont przelicza waluty po średnim kursie NBP, więc może się nieznacznie różnić od „Wszystkie konta” w xStation.
 - Widget odświeża się po każdym odczycie, ale częstotliwość ogranicza system, więc nie działa na żywo.
